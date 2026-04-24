@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Company Onboarding</title>
+    <style>
+        body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }
+        h1 { font-size: 1.4rem; }
+        button { padding: 10px 18px; font-size: 1rem; cursor: pointer; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .bar { width: 100%; height: 24px; background: #eee; border-radius: 12px; overflow: hidden; margin-top: 16px; }
+        .fill { height: 100%; background: linear-gradient(90deg, #4caf50, #8bc34a); width: 0%; transition: width 250ms ease; }
+        .meta { margin-top: 8px; font-size: 0.9rem; color: #555; }
+        .log { margin-top: 24px; background: #f7f7f7; padding: 12px; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; white-space: pre-wrap; max-height: 300px; overflow: auto; }
+        .status-COMPLETED { color: #2e7d32; font-weight: 600; }
+        .status-FAILED    { color: #c62828; font-weight: 600; }
+        .status-IN_PROGRESS, .status-PENDING { color: #1565c0; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <h1>Company onboarding — progress demo</h1>
+    <p>Clicks <code>POST /api/v1/companies/onboard</code> with a fixed sample payload, then subscribes to progress via SSE.</p>
+
+    <button id="start">Start onboarding</button>
+
+    <div class="bar"><div id="fill" class="fill"></div></div>
+    <div class="meta">
+        Status: <span id="status">idle</span>
+        &middot; Step: <span id="step">—</span>
+        &middot; <span id="percent">0</span>%
+        &middot; Job: <span id="jobId">—</span>
+    </div>
+
+    <div class="log" id="log"></div>
+
+<script>
+const startBtn = document.getElementById('start');
+const fill     = document.getElementById('fill');
+const statusEl = document.getElementById('status');
+const stepEl   = document.getElementById('step');
+const percentEl= document.getElementById('percent');
+const jobIdEl  = document.getElementById('jobId');
+const logEl    = document.getElementById('log');
+
+function log(line) {
+    const ts = new Date().toISOString().substring(11, 19);
+    logEl.textContent += `[${ts}] ${line}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function applyProgress(p) {
+    fill.style.width = p.percent + '%';
+    statusEl.textContent = p.status;
+    statusEl.className = 'status-' + p.status;
+    stepEl.textContent = p.currentStep ?? '—';
+    percentEl.textContent = p.percent;
+}
+
+// Sized so each step does enough DB work to be visibly slow on the progress bar.
+// Tweak these to push harder or dial back.
+const SIZE = {
+    departments:         100,
+    employeesPerDept:    100,
+    offices:              50,
+    roomsPerOffice:       50,
+    projects:             50,
+    tasksPerProject:     100,
+};
+
+function samplePayload() {
+    const suffix = Math.random().toString(36).slice(2, 7);
+
+    const departments = Array.from({ length: SIZE.departments }, (_, d) => ({
+        name: `Dept-${d + 1}`,
+        employees: Array.from({ length: SIZE.employeesPerDept }, (_, e) => ({
+            name:  `Emp ${d + 1}-${e + 1}`,
+            email: `emp${d + 1}.${e + 1}.${suffix}@acme.test`,
+        })),
+    }));
+
+    const offices = Array.from({ length: SIZE.offices }, (_, o) => ({
+        name: `Office-${o + 1}`,
+        city: 'San Francisco',
+        rooms: Array.from({ length: SIZE.roomsPerOffice }, (_, r) => ({
+            floor:  Math.floor(r / 10) + 1,
+            number: `${o + 1}-${r + 1}`,
+        })),
+    }));
+
+    const projects = Array.from({ length: SIZE.projects }, (_, p) => ({
+        name: `Project-${p + 1}`,
+        tasks: Array.from({ length: SIZE.tasksPerProject }, (_, t) => ({
+            title:       `Task ${p + 1}-${t + 1}`,
+            description: `Auto-generated task for project ${p + 1}`,
+        })),
+    }));
+
+    const totalRows =
+        1 +
+        SIZE.departments + SIZE.departments * SIZE.employeesPerDept +
+        SIZE.offices     + SIZE.offices     * SIZE.roomsPerOffice +
+        SIZE.projects    + SIZE.projects    * SIZE.tasksPerProject;
+    log(`Payload: ${SIZE.departments} depts × ${SIZE.employeesPerDept} emps, ` +
+        `${SIZE.offices} offices × ${SIZE.roomsPerOffice} rooms, ` +
+        `${SIZE.projects} projects × ${SIZE.tasksPerProject} tasks  (~${totalRows} rows)`);
+
+    return {
+        name: `Acme-${suffix}`,
+        taxId: '12-3456789',
+        departments,
+        offices,
+        projects,
+    };
+}
+
+startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    logEl.textContent = '';
+    applyProgress({ status: 'PENDING', percent: 0, currentStep: null });
+
+    const idempotencyKey = crypto.randomUUID();
+    log(`POST /api/v1/companies/onboard (Idempotency-Key=${idempotencyKey})`);
+
+    let resp;
+    try {
+        resp = await fetch('/api/v1/companies/onboard', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+            body: JSON.stringify(samplePayload())
+        });
+    } catch (e) {
+        log('Network error: ' + e.message);
+        startBtn.disabled = false;
+        return;
+    }
+
+    if (!resp.ok) {
+        const body = await resp.text();
+        log(`HTTP ${resp.status}: ${body}`);
+        startBtn.disabled = false;
+        return;
+    }
+
+    const accepted = await resp.json();
+    jobIdEl.textContent = accepted.jobId;
+    log(`Accepted. jobId=${accepted.jobId}. Opening SSE stream...`);
+
+    const es = new EventSource(`/api/v1/jobs/${accepted.jobId}/stream`);
+
+    es.addEventListener('progress', (e) => {
+        const p = JSON.parse(e.data);
+        applyProgress(p);
+        log(`progress  step=${p.stepIndex}/${p.totalSteps}  ${p.percent}%  ${p.currentStep ?? ''}`);
+    });
+    es.addEventListener('completed', (e) => {
+        const p = JSON.parse(e.data);
+        applyProgress(p);
+        log(`COMPLETED  companyId=${p.companyId}`);
+        es.close();
+        startBtn.disabled = false;
+    });
+    es.addEventListener('failed', (e) => {
+        const p = JSON.parse(e.data);
+        applyProgress(p);
+        log(`FAILED at "${p.failedStep}": ${p.errorMessage}`);
+        es.close();
+        startBtn.disabled = false;
+    });
+    es.onerror = () => {
+        log('SSE error (browser will auto-reconnect while the job is live)');
+    };
+});
+</script>
+</body>
+</html>
