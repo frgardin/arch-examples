@@ -21,8 +21,16 @@ O objetivo não é entregar um produto — é **praticar e comparar abordagens**
 | Pasta | Foco principal |
 |---|---|
 | `company-onboarding/` | Clean Architecture + job assíncrono com progresso via SSE. Patterns: Strategy+Template Method, Presenter, Gateway, Observer, Idempotency Key, Virtual Threads, Advisory Lock + índice único parcial. Stack: Spring Boot 4, Java 25, Postgres 18, Flyway, JPA, MapStruct. |
+| `company-onboarding-rabbit/` | Mesma funcionalidade do `company-onboarding`, mas usando **RabbitMQ** (exchange + queue + `@RabbitListener` + DLX) em vez de executor virtual. Serve para estudar broker-based messaging e comparar com as outras variantes. |
+| `company-onboarding-sqs/` | Mesma funcionalidade do `company-onboarding`, mas usando **AWS SQS** com **LocalStack** localmente. Pull-based (long-polling com AWS SDK v2 + `SmartLifecycle`), RedrivePolicy para DLQ. |
 
-Ao adicionar um novo projeto, atualize esta tabela.
+Essas três variantes compartilham **o mesmo núcleo** (entities, use cases,
+controllers, SSE, schema). Só o despacho do job (Ring 2 port
+`OnboardingJobDispatcher`) e sua implementação em Ring 3 mudam. Ver
+`ASYNC_COMPARISON.md` no raiz do repo para a comparação completa.
+
+Ao adicionar um novo projeto, atualize esta tabela. Ao adicionar uma nova
+variante de messaging à mesma família, atualize também o `ASYNC_COMPARISON.md`.
 
 ## Convenções ao criar/editar projetos
 

@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: onboarding-sqs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: onboarding
+      POSTGRES_USER: onboarding
+      POSTGRES_PASSWORD: onboarding
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onboarding -d onboarding"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:4
+    container_name: onboarding-sqs-localstack
+    restart: unless-stopped
+    environment:
+      SERVICES: sqs
+      # Pre-create queues + DLQ on container startup.
+      # SQS needs the DLQ first so the main queue can reference it via RedrivePolicy.
+      LOCALSTACK_HOST: localhost
+    ports:
+      - "4566:4566"   # edge port: SQS, API gateway, etc.
+    volumes:
+      - ./localstack-init:/etc/localstack/init/ready.d
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
